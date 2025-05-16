@@ -3,6 +3,7 @@ import subprocess
 from typing import List, Dict, Any
 from celery import Celery
 import logging
+from minio import Minio
 from ffmpeg_utils import build_ffmpeg_command, format_command_for_display, validate_ffmpeg_installed
 
 # Configure logging
@@ -15,6 +16,19 @@ if not validate_ffmpeg_installed():
 
 broker_url = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 result_backend = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')    
+
+# Configure MinIO client
+minio_client = Minio(
+    os.environ.get('MINIO_ENDPOINT', 'localhost:9000'),
+    access_key=os.environ.get('MINIO_ACCESS_KEY', 'minioadmin'),
+    secret_key=os.environ.get('MINIO_SECRET_KEY', 'minioadmin'),
+    secure=os.environ.get('MINIO_SECURE', 'False').lower() == 'true'
+)
+
+# Ensure bucket exists
+bucket_name = os.environ.get('MINIO_BUCKET_NAME', 'video-storage')
+if not minio_client.bucket_exists(bucket_name):
+    minio_client.make_bucket(bucket_name)
 
 # Configure Celery
 celery_app = Celery('celery_worker', broker=broker_url, backend=result_backend)
@@ -76,13 +90,30 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                 'return_code': process.returncode
             }
         
-        logger.info(f"FFmpeg processing completed successfully: {output_file}")
-        return {
-            'success': True,
-            'output_file': output_file,
-            'command': formatted_command,
-            'message': 'FFmpeg processing completed successfully'
-        }
+        # Upload the processed file to MinIO
+        object_name = os.path.basename(output_file)
+        try:
+            minio_client.fput_object(bucket_name, object_name, output_file)
+            storage_url = f"http://{os.environ.get('MINIO_PUBLIC_ENDPOINT')}/{bucket_name}/{object_name}"
+            logger.info(f"File uploaded to MinIO: {storage_url}")
+            
+            # Remove local file after successful upload
+            os.remove(output_file)
+            logger.info(f"Local file removed: {output_file}")
+            
+            return {
+                'success': True,
+                'output_url': storage_url,
+                'command': formatted_command,
+                'message': 'FFmpeg processing and upload completed successfully'
+            }
+        except Exception as upload_error:
+            logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
+            return {
+                'success': False,
+                'error': f"Failed to upload file: {str(upload_error)}",
+                'command': formatted_command
+            }
     
     except Exception as e:
         error_msg = str(e)
