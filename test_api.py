@@ -16,7 +16,7 @@ def test_compose_endpoint():
         "output_file": "output.mp4",
         "options": {
             "filter_complex": f"[0:v]scale=w='if(gte(iw/ih,{W}/{H}), -2, {W})':h='if(gte(iw/ih,{W}/{H}), {H}, -2)',setsar=1[scaled_cover];" +
-            f"[scaled_cover]crop=w={W}:h={H}:x='(iw-{W}/2)':y='(ih-{H}/2)',setsar=1[cropped_video]",
+            f"[scaled_cover]crop=w={W}:h={H}:x='(iw-{W})/2':y='(ih-{H})/2',setsar=1[cropped_video]",
             "map": ["[cropped_video]", "0:a?"],
             "c:v": "libx264",
             "crf": 23,
