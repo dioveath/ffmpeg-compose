@@ -1,4 +1,6 @@
 import os
+import json
+from datetime import timedelta
 import subprocess
 from typing import List, Dict, Any
 from celery import Celery
@@ -27,8 +29,25 @@ minio_client = Minio(
 
 # Ensure bucket exists
 bucket_name = os.environ.get('MINIO_BUCKET_NAME', 'video-storage')
-if not minio_client.bucket_exists(bucket_name):
-    minio_client.make_bucket(bucket_name)
+try:
+    if not minio_client.bucket_exists(bucket_name):
+        minio_client.make_bucket(bucket_name)
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": ["s3:GetObject"],
+                    "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
+                }
+            ]
+        }
+        policy_str = json.dumps(policy)
+        minio_client.set_bucket_policy(bucket_name, policy_str)
+        logger.info(f"Bucket '{bucket_name}' created and policy set.")
+except Exception as e:
+    logger.error(f"Failed to create or set policy for bucket '{bucket_name}': {str(e)}")
 
 # Configure Celery
 celery_app = Celery('celery_worker', broker=broker_url, backend=result_backend)
@@ -94,7 +113,9 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
         object_name = os.path.basename(output_file)
         try:
             minio_client.fput_object(bucket_name, object_name, output_file)
-            storage_url = f"http://{os.environ.get('MINIO_PUBLIC_ENDPOINT')}/{bucket_name}/{object_name}"
+            minio_endpoint = os.environ.get('MINIO_PUBLIC_ENDPOINT', 'localhost:9000')
+            storage_url = f"http://{minio_endpoint}/{bucket_name}/{object_name}"
+            # storage_url = minio_client.presigned_get_object(bucket_name, object_name, expires=timedelta(days=365*10))
             logger.info(f"File uploaded to MinIO: {storage_url}")
             
             # Remove local file after successful upload
