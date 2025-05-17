@@ -26,10 +26,32 @@ def test_compose_endpoint():
         },
         "global_options": ["-y", "-v", "warning"]
     }
+
+    new_data = {
+        "input_files": [
+            "https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS"
+        ],
+        "output_file": "output.mp4",
+        "options": {
+            "c:v": "libx264",
+            "preset": "medium",
+            "crf": 23,
+            "pix_fmt": "yuv420p",
+            "c:a": "aac",
+            "b:a": "128k",
+            "filter_complex": "[0:v]scale=w='if(gte(iw/ih,1080/1920),-2,1080)':h='if(gte(iw/ih,1080/1920),1920,-2)',setsar=1,crop=w=1080:h=1920:x='(iw-1080)/2':y='(ih-1920)/2',format=yuv420p,setsar=1[sc_v0];[sc_v0]drawtext=fontfile='/usr/share/fonts/custom/DejaVuSans.ttf':text='ugc agencies got you broke?':fontsize=35:fontcolor=white:x=(w-text_w)/2:y=h*0.15:box=1:boxcolor=black@0.6:boxborderw=5, drawtext=fontfile='/usr/share/fonts/custom/DejaVuSans.ttf':text='$6k a month for content? that'\\\\\\''s robbin'\\\\\\'' season.':fontsize=28:fontcolor=white:x=(w-text_w)/2:y=h*0.80:box=1:boxcolor=black@0.6:boxborderw=5[v0p];[v0p]concat=n=1:v=1[outv]",
+            "map": ["[outv]","0:a?"]
+        },
+        "global_options": [
+            "-y",
+            "-v",
+            "warning"
+        ]
+    }
     
     # Send request to /compose endpoint
     print("Sending request to /compose endpoint...")
-    response = requests.post(f"{BASE_URL}/compose", json=data)
+    response = requests.post(f"{BASE_URL}/compose", json=new_data)
     
     if response.status_code == 200:
         result = response.json()
