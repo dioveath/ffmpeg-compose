@@ -26,10 +26,11 @@ services:
       - .:/app
     depends_on:
       - redis
-    command: celery -A celery_worker worker --loglevel=info
+    command: celery -A celery_worker worker --loglevel=info -c 2
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERYD_MAX_TASKS_PER_CHILD=100
       - MINIO_ENDPOINT=minio:9000
       - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT}
       - MINIO_ACCESS_KEY=minioadmin
