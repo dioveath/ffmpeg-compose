@@ -4,6 +4,11 @@ from typing import List, Optional, Dict, Any
 from celery.result import AsyncResult
 import subprocess
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 from celery_worker import celery_app, process_ffmpeg_task
 
@@ -42,7 +47,7 @@ async def compose_ffmpeg(options: FFmpegOptions):
 
 @app.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
-    """Get the status of a task"""
+    """Get the status of a task with progress information"""
     task_result = AsyncResult(task_id, app=celery_app)
     
     result = {
@@ -50,11 +55,36 @@ async def get_task_status(task_id: str):
         "status": task_result.status,
     }
     
+    # Include progress information if available
+    if task_result.state == 'PROGRESS' and task_result.info:
+        if 'progress' in task_result.info:
+            result["progress"] = task_result.info['progress']
+            # Log progress information for debugging
+            logger.info(f"Task {task_id} progress: {task_result.info['progress']}")
+    
+    # Handle different task states
     if task_result.ready():
         if task_result.successful():
             result["result"] = task_result.result
+            # If the task is successful but doesn't have progress info in the result
+            # add a completed progress indicator
+            if 'progress' not in result and task_result.result and isinstance(task_result.result, dict):
+                if 'progress' in task_result.result:
+                    result["progress"] = task_result.result['progress']
         else:
             result["error"] = str(task_result.result)
+            # Add failed status to progress if available
+            if 'progress' not in result:
+                result["progress"] = {
+                    'status': 'failed',
+                    'progress_percent': 0.0
+                }
+    elif task_result.state == 'PENDING':
+        # Task hasn't started yet
+        result["progress"] = {
+            'status': 'pending',
+            'progress_percent': 0.0
+        }
     
     return result
 
