@@ -13,15 +13,15 @@ def test_compose_endpoint():
     W = 1080
     H = 1920
     data = {
-        "input_files": ["input.mp4"],
-        "output_file": "output.mp4",
+        "input_files": ["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"],
+        "output_file": "test2.mp4",
         "options": {
             "filter_complex": f"[0:v]scale=w='if(gte(iw/ih,{W}/{H}), -2, {W})':h='if(gte(iw/ih,{W}/{H}), {H}, -2)',setsar=1[scaled_cover];"
             + f"[scaled_cover]crop=w={W}:h={H}:x='(iw-{W})/2':y='(ih-{H})/2',setsar=1[cropped_video]",
             "map": ["[cropped_video]", "0:a?"],
             "c:v": "libx264",
-            "crf": 23,
-            "preset": "medium",
+            "crf": 28,
+            "preset": "veryfast",
             "c:a": "aac",
             "b:a": "128k",
         },
@@ -49,12 +49,13 @@ def test_compose_endpoint():
     new_data_2 = {
         "input_files": [
             "https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS",
-            "https://drive.google.com/uc?export=download&id=1HCr_UfoclSMB48xux4lZZUkFny_WdNap",
+            "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"
+            # "https://drive.google.com/uc?export=download&id=1HCr_UfoclSMB48xux4lZZUkFny_WdNap",
         ],
         "output_file": "output.mp4",
         "options": {
             "c:v": "libx264",
-            "b:v": "1000",
+            "crf": "28",
             "preset": "veryfast",
             "pix_fmt": "yuv420p",
             "map": "[outv]",

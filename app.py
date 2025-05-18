@@ -40,20 +40,45 @@ async def compose_ffmpeg(options: FFmpegOptions):
             global_options=options.global_options
         )
         
-        return {"task_id": task.id, "status": "Processing"}
+        return {"task_id": task.id, "status": "PROCESSING"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", status_code=200)
 async def get_task_status(task_id: str):
     """Get the status of a task with progress information"""
+    # Create AsyncResult object for the task
     task_result = AsyncResult(task_id, app=celery_app)
     
+    # Initialize result dictionary
     result = {
         "task_id": task_id,
         "status": task_result.status,
     }
+    
+    # Check if the task exists in the backend
+    # Note: Celery doesn't provide a direct way to check if a task exists
+    # A task with status PENDING could be either a non-existent task or a task that hasn't started yet
+    # We'll use a heuristic approach to determine if a task likely doesn't exist
+    
+    # If the task is PENDING and has no task_name, it's likely that the task doesn't exist
+    # This is not 100% reliable but provides a reasonable check
+    if task_result.state == 'PENDING' and not hasattr(task_result, 'task_name'):
+        # Check if this task ID was ever submitted through our API
+        # You could implement a more robust solution by tracking task IDs in a database
+        try:
+            # Try to get more information about the task
+            # If the task doesn't exist, this won't provide any additional information
+            if not task_result.info:
+                logger.warning(f"Task with ID {task_id} not found or no longer exists in the backend")
+                raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
+        except Exception as e:
+            # If there's an exception while trying to get task info, it likely doesn't exist
+            if "Task with ID" in str(e):
+                raise e
+            logger.error(f"Error checking task {task_id}: {str(e)}")
+            raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
     
     # Include progress information if available
     if task_result.state == 'PROGRESS' and task_result.info:
