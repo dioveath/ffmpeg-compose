@@ -1,8 +1,9 @@
 import os
 import json
+import requests
 from datetime import timedelta
 import subprocess
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from celery import Celery
 import logging
 from minio import Minio
@@ -62,12 +63,15 @@ celery_app.conf.update(
 )
 
 
+import requests
+
 @celery_app.task(bind=True)
 def process_ffmpeg_task(self, input_files: List[str], output_file: str, 
-                     options: Dict[str, Any], global_options: List[str]):
+                     options: Dict[str, Any], global_options: List[str], webhook_url: Optional[str] = None):
     """Celery task to process FFmpeg commands"""
     command = []
     process = None
+    result = None
 
     try:
         # Log task start
@@ -168,12 +172,13 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
         if returncode != 0:
             logger.error(f"FFmpeg command failed with return code {returncode}")
             logger.error(f"Error output: {stderr}")
-            return {
+            result = {
                 'success': False,
                 'error': stderr,
                 'command': formatted_command,
                 'return_code': returncode,
             }
+            return result
         
         # Upload the processed file to MinIO
         object_name = os.path.basename(output_file)
@@ -192,24 +197,26 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
             progress_data['progress_percent'] = 100.0
             progress_data['status'] = 'completed'
             
-            return {
+            result = {
                 'success': True,
                 'output_url': storage_url,
                 'command': formatted_command,
                 'message': 'FFmpeg processing and upload completed successfully',
                 # 'progress': progress_data
             }
+            return result
         except Exception as upload_error:
             logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
             # Update progress status for upload failure
             progress_data['status'] = 'upload_failed'
             
-            return {
+            result = {
                 'success': False,
                 'error': f"Failed to upload file: {str(upload_error)}",
                 'command': formatted_command,
                 'progress': progress_data
             }
+            return result
     
     except Exception as e:
         error_msg = str(e)
@@ -225,12 +232,13 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                 'status': 'failed'
             }
             
-        return {
+        result = {
             'success': False,
             'error': error_msg,
             'command': format_command_for_display(command) if command else 'Command not built',
             'progress': progress_data
         }
+        return result
     
     finally:
         if process is not None:
@@ -240,3 +248,20 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                     logger.info(f"Process {process.pid} terminated in finally block")
             except Exception as term_error:
                 logger.error(f"Error terminating process: {term_error}")
+        
+        if webhook_url:
+            task_result_data = {
+                'task_id': self.request.id,
+                'status': self.AsyncResult(self.request.id).state, # Get the final state
+                'result': result
+            }
+            
+            try:
+                logger.info(f"Sending webhook notification to {webhook_url} for task {self.request.id}")
+                response = requests.post(webhook_url, json=task_result_data, timeout=10) # Added timeout
+                response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+                logger.info(f"Webhook notification sent successfully to {webhook_url} for task {self.request.id}. Status: {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to send webhook notification to {webhook_url} for task {self.request.id}: {str(e)}")
+            except Exception as e:
+                logger.error(f"An unexpected error occurred while sending webhook to {webhook_url} for task {self.request.id}: {str(e)}")

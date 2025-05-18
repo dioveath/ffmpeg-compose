@@ -5,6 +5,7 @@ from celery.result import AsyncResult
 import subprocess
 import os
 import logging
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -21,6 +22,7 @@ class FFmpegOptions(BaseModel):
     output_file: str = Field(..., description="Output file path")
     options: Dict[str, Any] = Field(default_factory=dict, description="FFmpeg command options")
     global_options: List[str] = Field(default_factory=list, description="Global FFmpeg options")
+    webhook_url: Optional[str] = Field(default=None, description="Webhook URL to call upon task completion")
 
 
 @app.get("/")
@@ -37,7 +39,8 @@ async def compose_ffmpeg(options: FFmpegOptions):
             input_files=options.input_files,
             output_file=options.output_file,
             options=options.options,
-            global_options=options.global_options
+            global_options=options.global_options,
+            webhook_url=options.webhook_url
         )
         
         return {"task_id": task.id, "status": "PROCESSING"}
