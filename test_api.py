@@ -2,9 +2,37 @@ import requests
 import json
 import time
 import sys
+import signal
+import atexit
 
 # API endpoint
 BASE_URL = "http://localhost:5200"
+
+
+# Global variable to store the current task ID
+current_task_id = None
+
+
+def cleanup():
+    """Cleanup function to stop any running FFmpeg task"""
+    global current_task_id
+    if current_task_id:
+        try:
+            print(f"\nStopping task {current_task_id}...")
+            response = requests.delete(f"{BASE_URL}/tasks/{current_task_id}")
+            if response.status_code == 200:
+                print("Task stopped successfully.")
+            else:
+                print(f"Failed to stop task: {response.status_code} - {response.text}")
+        except Exception as e:
+            print(f"Error stopping task: {e}")
+
+
+def signal_handler(sig, frame):
+    """Handle termination signals"""
+    print("\nReceived termination signal. Cleaning up...")
+    cleanup()
+    sys.exit(0)
 
 
 def test_compose_endpoint():
@@ -13,7 +41,10 @@ def test_compose_endpoint():
     W = 1080
     H = 1920
     data = {
-        "input_files": ["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"],
+        # "input_files": ["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"],
+        "input_files": [
+            "https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS"
+        ],
         "output_file": "test2.mp4",
         "options": {
             "filter_complex": f"[0:v]scale=w='if(gte(iw/ih,{W}/{H}), -2, {W})':h='if(gte(iw/ih,{W}/{H}), {H}, -2)',setsar=1[scaled_cover];"
@@ -71,23 +102,32 @@ def test_compose_endpoint():
     if response.status_code == 200:
         result = response.json()
         task_id = result.get("task_id")
+        # Store the task ID in the global variable
+        global current_task_id
+        current_task_id = task_id
         print(f"Task submitted successfully. Task ID: {task_id}")
 
         # Poll for task status
         print("Polling for task status...")
-        while True:
-            status_response = requests.get(f"{BASE_URL}/tasks/{task_id}")
-            status_data = status_response.json()
+        try:
+            while True:
+                status_response = requests.get(f"{BASE_URL}/tasks/{task_id}")
+                status_data = status_response.json()
 
-            print(f"Task status: {status_data.get('status')}")
-            print(f"Progress: {status_data.get('progress')}")
+                print(f"Task status: {status_data.get('status')}")
+                print(f"Progress: {status_data.get('progress')}")
 
-            if status_data.get("status") in ["SUCCESS", "FAILURE"]:
-                print("Task completed.")
-                print(json.dumps(status_data, indent=2))
-                break
+                if status_data.get("status") in ["SUCCESS", "FAILURE", "REVOKED"]:
+                    print("Task completed.")
+                    print(json.dumps(status_data, indent=2))
+                    # Clear the task ID as it's completed
+                    current_task_id = None
+                    break
 
-            time.sleep(2)  # Wait for 2 seconds before polling again
+                time.sleep(2)  # Wait for 2 seconds before polling again
+        except KeyboardInterrupt:
+            # This will be caught by the signal handler, but we add it here for clarity
+            pass
     else:
         print(f"Error: {response.status_code}")
         print(response.text)
@@ -96,6 +136,13 @@ def test_compose_endpoint():
 def main():
     print("FFmpeg Compose API Test")
     print("=======================")
+
+    # Register signal handlers for graceful termination
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+    
+    # Register cleanup function to be called on normal exit
+    atexit.register(cleanup)
 
     # Check if API is running
     try:
