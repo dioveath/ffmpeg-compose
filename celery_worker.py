@@ -67,6 +67,8 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                      options: Dict[str, Any], global_options: List[str]):
     """Celery task to process FFmpeg commands"""
     command = []
+    process = None
+
     try:
         # Log task start
         logger.info(f"Starting FFmpeg task with {len(input_files)} input files, output: {output_file}")
@@ -110,6 +112,7 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
         self.update_state(
             state='PROGRESS',
             meta={
+                'pid': process.pid,
                 'progress': progress_data
             }
         )
@@ -170,15 +173,14 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                 'error': stderr,
                 'command': formatted_command,
                 'return_code': returncode,
-                'progress': progress_data
             }
         
         # Upload the processed file to MinIO
         object_name = os.path.basename(output_file)
         try:
             minio_client.fput_object(bucket_name, object_name, output_file)
-            minio_endpoint = os.environ.get('MINIO_PUBLIC_ENDPOINT', 'localhost:9000')
-            storage_url = f"http://{minio_endpoint}/{bucket_name}/{object_name}"
+            minio_public_endpoint = os.environ.get('MINIO_PUBLIC_ENDPOINT', 'http://localhost:9000')
+            storage_url = f"{minio_public_endpoint}/{bucket_name}/{object_name}"
             # storage_url = minio_client.presigned_get_object(bucket_name, object_name, expires=timedelta(days=365*10))
             logger.info(f"File uploaded to MinIO: {storage_url}")
             
@@ -195,7 +197,7 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
                 'output_url': storage_url,
                 'command': formatted_command,
                 'message': 'FFmpeg processing and upload completed successfully',
-                'progress': progress_data
+                # 'progress': progress_data
             }
         except Exception as upload_error:
             logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
@@ -229,3 +231,12 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
             'command': format_command_for_display(command) if command else 'Command not built',
             'progress': progress_data
         }
+    
+    finally:
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    logger.info(f"Process {process.pid} terminated in finally block")
+            except Exception as term_error:
+                logger.error(f"Error terminating process: {term_error}")

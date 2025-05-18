@@ -114,6 +114,58 @@ async def get_task_status(task_id: str):
     return result
 
 
+@app.delete("/tasks/{task_id}", status_code=200)
+async def stop_task(task_id: str):
+    """Stop a running task"""
+    # Create AsyncResult object for the task
+    task_result = AsyncResult(task_id, app=celery_app)
+    
+    # Check if the task exists
+    if task_result.state == 'PENDING' and not hasattr(task_result, 'task_name'):
+        try:
+            if not task_result.info:
+                logger.warning(f"Task with ID {task_id} not found or no longer exists in the backend")
+                raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
+        except Exception as e:
+            if "Task with ID" in str(e):
+                raise e
+            logger.error(f"Error checking task {task_id}: {str(e)}")
+            raise HTTPException(status_code=404, detail=f"Task with ID {task_id} not found")
+    
+    # Check if the task is already completed
+    if task_result.ready():
+        return {
+            "task_id": task_id,
+            "status": task_result.status,
+            "message": "Task already completed, cannot be stopped"
+        }
+    
+    pid = None
+    if task_result.info and isinstance(task_result.info, dict) and 'pid' in task_result.info:
+        pid = task_result.info['pid']
+    
+    # Revoke the task
+    task_result.revoke(terminate=True, signal='SIGTERM')
+    logger.info(f"Task {task_id} has been stopped")
+
+    if pid:
+        try:
+            import os
+            import signal
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Sent SIGTERM to FFmpeg process with PID {pid}")
+        except ProcessLookupError:
+            logger.warning(f"Process with PID {pid} not found, may have already terminated")
+        except Exception as e:
+            logger.error(f"Error terminating FFmpeg process: {str(e)}")
+    
+    return {
+        "task_id": task_id,
+        "status": "REVOKED",
+        "message": "Task has been stopped successfully"
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

@@ -76,6 +76,8 @@ celery -A celery_worker flower --port=5555
 }
 ```
 
+# FFmpeg Compose API
+## API Usage
 ### Check Task Status
 
 **Endpoint**: `GET /tasks/{task_id}`
@@ -94,6 +96,25 @@ celery -A celery_worker flower --port=5555
   }
 }
 ```
+
+### Stop Task
+
+**Endpoint**: `DELETE /tasks/{task_id}`
+
+**Response**:
+
+```json
+{
+  "task_id": "task-uuid",
+  "status": "REVOKED",
+  "message": "Task has been stopped successfully"
+}
+```
+
+Possible responses:
+- Task stopped successfully (200 OK)
+- Task already completed (200 OK with appropriate message)
+- Task not found (404 Not Found)
 
 ## Example Use Cases
 
