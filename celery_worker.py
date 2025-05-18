@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from celery import Celery
 import logging
 from minio import Minio
-from ffmpeg_utils import build_ffmpeg_command, format_command_for_display, validate_ffmpeg_installed
+from ffmpeg_utils import build_ffmpeg_command, format_command_for_display, validate_ffmpeg_installed, parse_ffmpeg_progress
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -89,24 +89,88 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
         formatted_command = format_command_for_display(command)
         logger.info(f"Executing FFmpeg command: {formatted_command}")
         
-        # Execute the command
+        # Execute the command with progress tracking
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True
+            universal_newlines=True,
+            bufsize=1
         )
         
-        stdout, stderr = process.communicate()
+        # Track progress
+        progress_data = {
+            'time': '00:00:00.00',
+            'frame': 0,
+            'progress_percent': 0.0,
+            'status': 'processing'
+        }
         
-        if process.returncode != 0:
-            logger.error(f"FFmpeg command failed with return code {process.returncode}")
+        # Update task state with initial progress
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'progress': progress_data
+            }
+        )
+        
+        # Process output in real-time to track progress
+        stderr_lines = []
+        last_update_time = 0
+        update_interval = 1.0  # Update progress at most once per second
+        duration = None
+        
+        import time
+        current_time = time.time()
+        
+        for line in iter(process.stderr.readline, ''):
+            stderr_lines.append(line)
+            # Parse progress information
+            progress_info, detected_duration = parse_ffmpeg_progress(line, duration)
+            
+            if duration is None and detected_duration is not None:
+                duration = detected_duration
+            
+            # Update progress data if new information is available
+            if progress_info:
+                progress_data.update(progress_info)
+                
+                # Limit how often we update the task state to avoid overwhelming Celery/Redis
+                if current_time - last_update_time >= update_interval:
+                    # Update task state with progress
+                    self.update_state(
+                        state='PROGRESS',
+                        meta={
+                            'progress': progress_data
+                        }
+                    )
+                    logger.info(f"FFmpeg progress: {progress_data}")
+                    last_update_time = current_time
+            
+            # Update current time for next iteration
+            current_time = time.time()
+        
+        # Join stderr lines for error reporting
+        stderr = '\n'.join(stderr_lines)
+            
+        # Wait for process to complete
+        process.stderr.close()
+        process.stdout.close()
+        returncode = process.wait()
+        
+        # Get any remaining output
+        stdout = ''
+        stderr = ''
+        
+        if returncode != 0:
+            logger.error(f"FFmpeg command failed with return code {returncode}")
             logger.error(f"Error output: {stderr}")
             return {
                 'success': False,
                 'error': stderr,
                 'command': formatted_command,
-                'return_code': process.returncode
+                'return_code': returncode,
+                'progress': progress_data
             }
         
         # Upload the processed file to MinIO
@@ -122,25 +186,46 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
             os.remove(output_file)
             logger.info(f"Local file removed: {output_file}")
             
+            # Update progress to 100% for completed tasks
+            progress_data['progress_percent'] = 100.0
+            progress_data['status'] = 'completed'
+            
             return {
                 'success': True,
                 'output_url': storage_url,
                 'command': formatted_command,
-                'message': 'FFmpeg processing and upload completed successfully'
+                'message': 'FFmpeg processing and upload completed successfully',
+                'progress': progress_data
             }
         except Exception as upload_error:
             logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
+            # Update progress status for upload failure
+            progress_data['status'] = 'upload_failed'
+            
             return {
                 'success': False,
                 'error': f"Failed to upload file: {str(upload_error)}",
-                'command': formatted_command
+                'command': formatted_command,
+                'progress': progress_data
             }
     
     except Exception as e:
         error_msg = str(e)
         logger.exception(f"Exception during FFmpeg processing: {error_msg}")
+        # Set progress status for general failure
+        if 'progress_data' in locals():
+            progress_data['status'] = 'failed'
+        else:
+            progress_data = {
+                'time': '00:00:00.00',
+                'frame': 0,
+                'progress_percent': 0.0,
+                'status': 'failed'
+            }
+            
         return {
             'success': False,
             'error': error_msg,
-            'command': format_command_for_display(command) if command else 'Command not built'
+            'command': format_command_for_display(command) if command else 'Command not built',
+            'progress': progress_data
         }

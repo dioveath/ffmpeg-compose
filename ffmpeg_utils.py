@@ -1,7 +1,11 @@
 import subprocess
 import shlex
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 import os
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 def validate_ffmpeg_installed() -> bool:
@@ -84,26 +88,90 @@ def format_command_for_display(command: List[str]) -> str:
     return ' '.join(formatted_cmd)
 
 
-def parse_ffmpeg_progress(stderr_line: str) -> Optional[Dict[str, Any]]:
-    """Parse FFmpeg progress information from stderr output"""
+def parse_ffmpeg_progress(stderr_line: str, detected_duration: Optional[float] = None) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+    """Parse FFmpeg progress information from stderr output
+    Extracts time, frame, and calculates progress percentage from FFmpeg stderr output.
+    Args:
+        stderr_line: A line of FFmpeg stderr output
+    Returns:
+        Dictionary with progress information or None if no progress info found
+    """
+
+    # Try to detect the duration from FFmpeg output
+    if 'Duration:' in stderr_line and detected_duration is None:
+        try:
+            duration_str = stderr_line.split('Duration:')[1].split(',')[0].strip()
+            duration_parts = duration_str.split(':')
+            if len(duration_parts) == 3:
+                hours, minutes, seconds = duration_parts
+                # Handle seconds with milliseconds
+                if '.' in seconds:
+                    seconds, ms = seconds.split('.')
+                    detected_duration = (int(hours) * 3600) + (int(minutes) * 60) + int(seconds) + (int(ms) / 100)
+                else:
+                    detected_duration = (int(hours) * 3600) + (int(minutes) * 60) + int(seconds)
+                logger.info(f"Detected video duration: {detected_duration} seconds")
+                return None, detected_duration
+        except (IndexError, ValueError):
+            pass
+    
     if 'time=' in stderr_line:
         try:
             # Extract time information
             time_str = stderr_line.split('time=')[1].split(' ')[0]
+            
+            # Calculate progress percentage based on time
+            # Convert time string (HH:MM:SS.MS) to seconds for calculation
+            time_parts = time_str.split(':')
+            if len(time_parts) == 3:
+                hours, minutes, seconds = time_parts
+                # Handle seconds with milliseconds
+                if '.' in seconds:
+                    seconds, ms = seconds.split('.')
+                    total_seconds = (int(hours) * 3600) + (int(minutes) * 60) + int(seconds) + (int(ms) / 100)
+                else:
+                    total_seconds = (int(hours) * 3600) + (int(minutes) * 60) + int(seconds)
+                
+                # Calculate progress percentage using detected duration if available
+                if detected_duration and detected_duration > 0:
+                    progress_percent = min(100.0, (total_seconds / detected_duration) * 100)
+                else:
+                    # Fallback to a reasonable estimate if duration is unknown
+                    max_duration = 300  # 5 minutes in seconds as a reasonable fallback
+                    progress_percent = min(100.0, (total_seconds / max_duration) * 100)
+                
+                # Ensure we're not stuck at 0% by setting a minimum progress value
+                # once we have time information
+                if progress_percent < 0.1 and total_seconds > 0:
+                    progress_percent = 0.1
+            else:
+                progress_percent = 0.0
+            
             # Extract frame information if available
             frame = None
             if 'frame=' in stderr_line:
-                frame_str = stderr_line.split('frame=')[1].split(' ')[0]
+                frame_str = stderr_line.split('frame=')[1].split(' ')[0].strip()
                 try:
                     frame = int(frame_str)
+                    # Use frame count as an additional progress indicator
+                    if frame > 0 and progress_percent == 0.0:
+                        progress_percent = 0.1  # At least show some progress if frames are being processed
                 except ValueError:
                     pass
             
+            # Extract speed information if available
+            speed = None
+            if 'speed=' in stderr_line:
+                speed_str = stderr_line.split('speed=')[1].split(' ')[0]
+                speed = speed_str
+            
             return {
                 'time': time_str,
-                'frame': frame
-            }
+                'frame': frame,
+                'speed': speed,
+                'progress_percent': round(progress_percent, 2)
+            }, detected_duration
         except (IndexError, ValueError):
             pass
     
-    return None
+    return None, detected_duration
