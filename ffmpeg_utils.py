@@ -50,6 +50,10 @@ def build_ffmpeg_command(input_files: List[str],
                 command.extend(shlex.split(opt))
             else:
                 command.append(opt)
+                
+    import multiprocessing
+    num_threads = multiprocessing.cpu_count()
+    global_options.extend(["-filter_complex_threads", str(num_threads)])
     
     # Add input files
     for input_file in input_files:
