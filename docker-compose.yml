@@ -37,6 +37,8 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_BUCKET_NAME=video-storage
       - MINIO_SECURE=False
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   flower:
     build: .
