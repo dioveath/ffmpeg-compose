@@ -6,6 +6,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /usr/local/share/fonts    
+COPY /fonts /usr/local/share/fonts
+RUN fc-cache -f -v
+
 WORKDIR /app
 
 # Copy requirements and install dependencies

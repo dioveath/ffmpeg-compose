@@ -2,3 +2,4 @@ __pycache__
 output.mp4
 .gitignore
 .git
+.env

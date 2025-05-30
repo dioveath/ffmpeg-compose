@@ -29,6 +29,31 @@ class FFmpegOptions(BaseModel):
 async def root():
     return {"message": "FFmpeg Compose API is running"}
 
+@app.get("/caption_fonts")
+async def list_caption_fonts():
+    """Endpoint to list available caption fonts"""
+    try:
+        result = subprocess.run(['fc-list'], capture_output=True, text=True, check=True)
+        font_names = set()
+
+        for line in result.stdout.splitlines():
+            if ':' not in line:
+                continue
+
+            name_part = line.split(':', 2)[1].strip()
+            for name in name_part.split(','):
+                cleaned_name = name.strip()
+                if cleaned_name:
+                    font_names.add(cleaned_name)
+
+        return {"fonts": sorted(font_names)}
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error listing caption fonts: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error listing caption fonts")
+    except Exception as e:
+        logger.error(f"Unexpected error listing caption fonts: {str(e)}")
+        raise HTTPException(status_code=500, detail="Unexpected error listing caption fonts")
+        
 
 @app.post("/compose")
 async def compose_ffmpeg(options: FFmpegOptions):

@@ -81,10 +81,9 @@ def test_compose_endpoint_with_webhook():
     W = 1080
     H = 1920
     data = {
-        "input_files": [
-            "https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS"
-        ],
-        "output_file": "test_webhook.mp4",
+        # "input_files": ["http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"],
+        "input_files": ["https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS"],
+        "output_file": "new_amazing_test.mp4",
         "options": {
             "filter_complex": f"[0:v]scale=w='if(gte(iw/ih,{W}/{H}), -2, {W})':h='if(gte(iw/ih,{W}/{H}), {H}, -2)',setsar=1[scaled_cover];"
             + f"[scaled_cover]crop=w={W}:h={H}:x='(iw-{W})/2':y='(ih-{H})/2',setsar=1[cropped_video]",

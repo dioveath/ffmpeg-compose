@@ -3,6 +3,7 @@ version: '3.8'
 services:
   web:
     build: .
+    restart: always
     ports:
       - "5200:8000"
     volumes:
@@ -22,6 +23,7 @@ services:
 
   worker:
     build: .
+    restart: always
     volumes:
       - .:/app
     depends_on:
@@ -42,6 +44,7 @@ services:
 
   flower:
     build: .
+    restart: always
     ports:
       - "5555:5555"
     volumes:
@@ -61,11 +64,13 @@ services:
       - MINIO_SECURE=False
 
   redis:
+    restart: always
     image: redis:7-alpine
     ports:
       - "6379:6379"
 
   minio:
+    restart: always
     image: minio/minio:latest
     ports:
       - "9000:9000"

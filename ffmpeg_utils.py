@@ -79,6 +79,61 @@ def build_ffmpeg_command(input_files: List[str],
     return command
 
 
+def download_remote_file_to_temp(url: str, temp_files_list: List[str]) -> str:
+    """Download a remote file to a temporary location
+    Args:
+        url: URL of the remote file
+        temp_files_list: List to store temporary file paths
+    Returns:
+        Path to the downloaded temporary file
+    Raises:
+        requests.exceptions.RequestException: If there's an error downloading the file
+        IOError: If there's an error creating the temporary file
+        ValueError: If the content type of the remote file is unsupported
+    """
+    # Use urllib to download the file to a temporary location
+    import requests
+    import tempfile
+
+    logger.info(f"Downloading remote file: {url}")
+    try:
+        response = requests.get(url, stream=True, timeout=30)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+    
+        parsed_url = urlparse(url)
+        original_filename = os.path.basename(parsed_url.path)
+        _, ext = os.path.splitext(original_filename)
+        if not ext:
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'application/x-subrip' in content_type:
+                ext = '.srt'
+            elif 'text/plain' in content_type and ('.ass' in url or '.ssa' in url):
+                ext = '.ass'
+            elif 'text/vtt' in content_type:
+                ext = '.vtt'
+            else:
+                raise ValueError("Unsupported content type for remote file.")
+
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext, mode='wb')
+        try:
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_file.write(chunk)
+            temp_file.close()
+            temp_files_list.append(temp_file.name)
+            logger.info(f"Downloaded remote file to temporary location: {temp_file.name}")
+            return temp_file.name.replace('\\', '/')
+        except IOError as e:
+            logger.error(f"Error creating temporary file: {e}")
+            temp_file.close()
+            if os.path.exists(temp_file.name):
+                os.remove(temp_file.name)
+            raise IOError(f"Error creating temporary file: {e}")
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error downloading remote file: {e}")
+        raise e
+
+
 def format_command_for_display(command: List[str]) -> str:
     """Format a command list into a readable string for display"""
     formatted_cmd = []
