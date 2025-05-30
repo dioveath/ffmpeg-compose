@@ -6,3 +6,4 @@ __pycache__
 *~
 .conda
 output.mp4
+.env

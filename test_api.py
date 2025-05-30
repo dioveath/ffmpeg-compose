@@ -80,7 +80,7 @@ def test_compose_endpoint():
     new_data_2 = {
         "input_files": [
             "https://drive.google.com/uc?export=download&id=1ATipDW3BKwtVGmC1hG6CKQ7wcsYYEvcS",
-            "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"
+            "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
             # "https://drive.google.com/uc?export=download&id=1HCr_UfoclSMB48xux4lZZUkFny_WdNap",
         ],
         "output_file": "output.mp4",
@@ -95,9 +95,29 @@ def test_compose_endpoint():
         "global_options": ["-y"],
     }
 
+    new_data_3 = {
+        "input_files": [
+            "https://storage.charichagaming.com.np/video-storage/12779356_3840_2160_50fps.mp4",
+            "https://storage.charichagaming.com.np/audio-storage/fb92aa39-4e6c-4a7d-80ef-49db76f10325.mp3",
+        ],
+        "output_file": str(time.time()) + ".mp4",
+        "options": {
+            "filter_complex": "[0:v:0]scale=1920:1080[v_final]",
+            "map": ["[v_final]", "1:a:0"],
+            "c:v": "libx264",
+            "preset": "ultrafast",
+            "crf": "25",
+            "c:a": "libmp3lame",
+            "q:a": "7",
+            "shortest": True
+        },
+        "global_options": ["-y", "-stream_loop", "-1"],
+    }
+
+
     # Send request to /compose endpoint
     print("Sending request to /compose endpoint...")
-    response = requests.post(f"{BASE_URL}/compose", json=data)
+    response = requests.post(f"{BASE_URL}/compose", json=new_data_3)
 
     if response.status_code == 200:
         result = response.json()
@@ -140,7 +160,7 @@ def main():
     # Register signal handlers for graceful termination
     signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
     signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
-    
+
     # Register cleanup function to be called on normal exit
     atexit.register(cleanup)
 

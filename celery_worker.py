@@ -91,6 +91,7 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
             global_options=global_options
         )
         
+        logger.info(f"Built FFmpeg command: {command}")
         # Format command for logging
         formatted_command = format_command_for_display(command)
         logger.info(f"Executing FFmpeg command: {formatted_command}")
