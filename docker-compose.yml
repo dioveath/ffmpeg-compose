@@ -68,6 +68,8 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
 
   minio:
     restart: always
@@ -84,3 +86,4 @@ services:
 
 volumes:
   minio_data:
+  redis_data:
