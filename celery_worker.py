@@ -165,11 +165,7 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
         process.stderr.close()
         process.stdout.close()
         returncode = process.wait()
-        
-        # Get any remaining output
-        stdout = ''
-        stderr = ''
-        
+
         if returncode != 0:
             logger.error(f"FFmpeg command failed with return code {returncode}")
             logger.error(f"Error output: {stderr}")
