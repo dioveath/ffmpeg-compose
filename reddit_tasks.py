@@ -31,6 +31,7 @@ def process_reddit_intro_task(
     font: str,
     font_color: str,
     padding: int,
+    background_video_url: Optional[str] = None,
     webhook_url: Optional[str] = None
 ):
     """Celery task to generate the Reddit intro video"""
@@ -57,6 +58,9 @@ def process_reddit_intro_task(
     output_path = f"{TEMP_ASSETS_PATH}/{temp_folder}/reddit_intro.mp4"
 
     try:
+        if background_video_url is None:
+            background_video_url = "https://storage.charichagaming.com.np/video-storage/Satisfying%20Cake%20Compilation-satisfying-cake.mp4"
+
         def update_celery_progress(completed_percent: float):
             progress = int(completed_percent * 100)
             logger.info(f"Progress: {progress}%")
@@ -71,19 +75,22 @@ def process_reddit_intro_task(
                         "message": "Generating Reddit intro video..."
                     }
                 )
-            
         update_celery_progress(0.0)
 
         with ProgressFfmpeg(float(duration), update_celery_progress) as progress_monitor:
-            video_filter_args = (
-                f"scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=decrease,"
-                f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black"
+            filter_complex_args = (
+                f"[0:v]scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=increase,"
+                f"crop={resolution_x}:{resolution_y}[bg];"
+                # f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
+                f"[1:v]scale={screenshot_width}:-1[title_scaled];"
+                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2[outv]"
             )
             ffmpeg_cmd = [
                 "ffmpeg", "-y",
+                "-stream_loop", "-1", "-i", background_video_url,
                 "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png",
-                # "-vf", f"scale={screenshot_width}:-1",
-                "-vf", video_filter_args,
+                "-filter_complex", filter_complex_args,
+                "-map", "[outv]",
                 "-c:v", "libx264",
                 "-t", f"{duration}",
                 "-pix_fmt", "yuv420p",
@@ -98,9 +105,10 @@ def process_reddit_intro_task(
             if process.returncode != 0:
                 error_msg = f"Error generating video: {stderr}"
                 raise subprocess.CalledProcessError(returncode=process.returncode, cmd=ffmpeg_cmd, output=stdout, stderr=stderr)
-                
+
+            update_celery_progress(1.0)    
             logger.info(f"Video generated successfully: {output_path}")
-            update_celery_progress(1.0)
+            
 
             result = {
                 "task_id": task_id,
@@ -112,6 +120,7 @@ def process_reddit_intro_task(
             return result
     except subprocess.CalledProcessError as e:
         logger.error(f"Error generating video: {e}")
+        logger.error(f"FFmpeg stderr output: {e.stderr}")
         self.update_state(
             state=self.states.FAILURE,
             meta={
