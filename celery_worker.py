@@ -59,7 +59,7 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    include=['celery_worker']
+    include=['celery_worker', 'reddit_tasks']
 )
 
 

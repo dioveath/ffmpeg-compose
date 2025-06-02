@@ -12,6 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 from celery_worker import celery_app, process_ffmpeg_task
+from reddit_tasks import process_reddit_intro_task
 
 app = FastAPI(title="FFmpeg Compose API", description="API for processing FFmpeg commands")
 
@@ -193,6 +194,36 @@ async def stop_task(task_id: str):
         "message": "Task has been stopped successfully"
     }
 
+class RedditIntroOptions(BaseModel):
+    subreddit: str = Field(..., description="Subreddit name")
+    title: str = Field(..., description="Reddit title")
+    resolution_x: int = Field(default=1920, description="Video resolution X")
+    resolution_y: int = Field(default=1080, description="Video resolution Y")
+    duration: int = Field(default=8, description="Video duration in seconds")
+    font: str = Field(default="Roboto-Bold.ttf", description="Font for the title")
+    font_color: str = Field(default="#000000", description="Font color")
+    padding: int = Field(default=5, description="Padding for the title")
+    webhook_url: Optional[str] = Field(default=None, description="Webhook URL to call upon task completion")
+
+@app.post("/reddit_intro")
+async def generate_reddit_intro(options: RedditIntroOptions):
+    """Endpoint to generate the Reddit intro video"""
+    try:
+        task = process_reddit_intro_task.delay(
+            subreddit=options.subreddit,
+            title=options.title,
+            resolution_x=options.resolution_x,
+            resolution_y=options.resolution_y,
+            duration=options.duration,
+            font=options.font,
+            font_color=options.font_color,
+            padding=options.padding,
+            webhook_url=options.webhook_url                 
+        )        
+        return {"task_id": task.id, "status": "PROCESSING"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
 
 if __name__ == "__main__":
     import uvicorn
