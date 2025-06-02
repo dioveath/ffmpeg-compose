@@ -83,7 +83,7 @@ def process_reddit_intro_task(
                 f"crop={resolution_x}:{resolution_y}[bg];"
                 # f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
                 f"[1:v]scale={screenshot_width}:-1[title_scaled];"
-                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2[outv]"
+                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2,fade=t=in:st=0:d=2,fade=t=out:st={duration-2}:d=3[outv]"
             )
             ffmpeg_cmd = [
                 "ffmpeg", "-y",
