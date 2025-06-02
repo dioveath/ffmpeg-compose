@@ -1,3 +1,4 @@
+import re
 import logging
 import json
 import subprocess
@@ -6,8 +7,18 @@ from typing import Optional
 from PIL import Image
 from celery_worker import celery_app
 from reddit_utils import create_fancy_thumbnail
+from ffmpeg_utils import ProgressFfmpeg
 
 logger = logging.getLogger(__name__)
+
+def clean_text_to_folder_name(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r'[\s!"\'-]+', '_', text)
+    text = re.sub(r'[^a-z0-0_]', '', text)
+    text = re.sub(r'_+', '_', text)
+    text = text.strip('_')
+    return text    
+
 
 @celery_app.task(bind=True)
 def process_reddit_intro_task(
@@ -24,7 +35,6 @@ def process_reddit_intro_task(
 ):
     """Celery task to generate the Reddit intro video"""
     task_id = self.request.id
-    result = {}
     logger.info(f"Starting Reddit intro task with ID: {task_id}")
     logger.info(f"resolution_x: {resolution_x}")
     logger.info(f"resolution_y: {resolution_y}")
@@ -33,48 +43,99 @@ def process_reddit_intro_task(
     logger.info(f"font_color: {font_color}")
     logger.info(f"padding: {padding}")
 
-    temp_assets_path = "temp/assets"
-    Path(f"{temp_assets_path}/png").mkdir(parents=True, exist_ok=True)
+    result = {}
+    TEMP_ASSETS_PATH = "temp/assets"
+    temp_folder = clean_text_to_folder_name(title)
+    Path(f"{TEMP_ASSETS_PATH}/{temp_folder}").mkdir(parents=True, exist_ok=True)
     screenshot_width = int((resolution_x * 90) // 100)
     title_template = Image.open("assets/title_template.png")
 
     logger.info(f"Creating customized title image...")
     title_img = create_fancy_thumbnail(title_template, title, font_color, padding, subreddit=subreddit)
-    title_img.save(f"{temp_assets_path}/png/title.png")
+    title_img.save(f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png")
 
-    output_path = f"{temp_assets_path}/png/reddit_intro.mp4"
+    output_path = f"{TEMP_ASSETS_PATH}/{temp_folder}/reddit_intro.mp4"
 
     try:
-        video_filter_args = (
-            f"scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=decrease,"
-            f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black"
-        )
+        def update_celery_progress(completed_percent: float):
+            progress = int(completed_percent * 100)
+            logger.info(f"Progress: {progress}%")
+            if hasattr(self, "update_state"): # check if running in a Celery task (context)
+                self.update_state(
+                    task_id=task_id,
+                    state="PROGRESS",
+                    meta={
+                        "task_id": task_id,
+                        "status": "processing",
+                        "progress": progress,
+                        "message": "Generating Reddit intro video..."
+                    }
+                )
+            
+        update_celery_progress(0.0)
 
-        ffmpeg_cmd = [
-            "ffmpeg", "-y",
-            "-loop", "1", "-framerate", "30", "-i", f"{temp_assets_path}/png/title.png",
-            # "-vf", f"scale={screenshot_width}:-1",
-            "-vf", video_filter_args,
-            "-c:v", "libx264",
-            "-t", f"{duration}",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",
-            output_path
-        ]
+        with ProgressFfmpeg(float(duration), update_celery_progress) as progress_monitor:
+            video_filter_args = (
+                f"scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=decrease,"
+                f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black"
+            )
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png",
+                # "-vf", f"scale={screenshot_width}:-1",
+                "-vf", video_filter_args,
+                "-c:v", "libx264",
+                "-t", f"{duration}",
+                "-pix_fmt", "yuv420p",
+                "-r", "30",
+                "-progress", progress_monitor.output_file.name,
+                output_path
+            ]
+            logger.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
+            process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            stdout, stderr = process.communicate()
 
-        logger.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
+            if process.returncode != 0:
+                error_msg = f"Error generating video: {stderr}"
+                raise subprocess.CalledProcessError(returncode=process.returncode, cmd=ffmpeg_cmd, output=stdout, stderr=stderr)
+                
+            logger.info(f"Video generated successfully: {output_path}")
+            update_celery_progress(1.0)
 
-        subprocess.run(ffmpeg_cmd, check=True)
-
-        result = {
-            "task_id": task_id,
-            "status": "COMPLETED",
-            "message": "Reddit intro video generated successfully",
-            "output_file": output_path
-        }
-
-        logger.info(f"Result: {json.dumps(result, indent=4)}")
-
+            result = {
+                "task_id": task_id,
+                "status": "completed",
+                "output_file": output_path,
+                "message": "Reddit intro video generated successfully"                
+            }
+            logger.info(f"Result: {json.dumps(result, indent=4)}")
+            return result
     except subprocess.CalledProcessError as e:
-        print(f"Error generating video: {e}")
-        return None
+        logger.error(f"Error generating video: {e}")
+        self.update_state(
+            state=self.states.FAILURE,
+            meta={
+                "task_id": task_id,
+                "status": "failed",
+                "stderr": e.stderr,
+                "progress": self.request.meta.get("progress", 0),
+                "message": "Error generating Reddit intro video"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error generating video: {e}")
+        self.update_state(
+            state=self.states.FAILURE,
+            meta={
+                "task_id": task_id,
+                "status": "failed",
+                "progress": self.request.meta.get("progress", 0),
+                "message": "Error generating Reddit intro video"
+            }
+        )
+    finally:
+        logger.info(f"Cleaning up temporary assets...")
+        # shutil.rmtree(temp_assets_path)
+        logger.info(f"Cleaned up temporary assets")
+        return result
+

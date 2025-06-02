@@ -1,8 +1,13 @@
+import time
+import threading
+import tempfile
+import requests
 import subprocess
 import shlex
-from typing import List, Dict, Any, Optional, Union, Tuple
 import os
 import logging
+
+from typing import List, Dict, Any, Optional, Union, Tuple
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -91,9 +96,6 @@ def download_remote_file_to_temp(url: str, temp_files_list: List[str]) -> str:
         IOError: If there's an error creating the temporary file
         ValueError: If the content type of the remote file is unsupported
     """
-    # Use urllib to download the file to a temporary location
-    import requests
-    import tempfile
 
     logger.info(f"Downloading remote file: {url}")
     try:
@@ -234,3 +236,44 @@ def parse_ffmpeg_progress(stderr_line: str, detected_duration: Optional[float] =
             pass
     
     return None, detected_duration
+
+
+class ProgressFfmpeg(threading.Thread):
+    def __init__(self, vid_duration_seconds, progress_update_callback):
+        threading.Thread.__init__(self, name="ProgressFfmpeg")
+        self.stop_event = threading.Event()
+        self.output_file = tempfile.NamedTemporaryFile(mode="w+", delete=False)
+        self.vid_duration_seconds = vid_duration_seconds
+        self.progress_update_callback = progress_update_callback
+
+    def run(self):
+        while not self.stop_event.is_set():
+            latest_progress = self.get_latest_ms_progress()
+            if latest_progress is not None:
+                completed_percent = latest_progress / self.vid_duration_seconds
+                self.progress_update_callback(completed_percent)
+            time.sleep(1)
+
+    def get_latest_ms_progress(self):
+        lines = self.output_file.readlines()
+
+        if lines:
+            for line in lines:
+                if "out_time_ms" in line:
+                    out_time_ms_str = line.split("=")[1].strip()
+                    if out_time_ms_str.isnumeric():
+                        return float(out_time_ms_str) / 1000000.0
+                    else:
+                        # Handle the case when "N/A" is encountered
+                        return None
+        return None
+
+    def stop(self):
+        self.stop_event.set()
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.stop()
