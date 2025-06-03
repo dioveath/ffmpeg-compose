@@ -12,6 +12,8 @@ from webhook_utils import send_webhook_task
 from celery.result import AsyncResult
 from celery import states
 
+from minioclient_utils import minio_client, bucket_name, minio_public_endpoint
+
 logger = logging.getLogger(__name__)
 
 def clean_text_to_folder_name(text: str) -> str:
@@ -111,13 +113,18 @@ def process_reddit_intro_task(
 
             update_celery_progress(1.0)    
             logger.info(f"Video generated successfully: {output_path}")
+
+            minio_client.fput_object(bucket_name, f"{temp_folder}/reddit_intro.mp4", output_path)
+            output_url = f"{minio_public_endpoint}/{bucket_name}/{temp_folder}/reddit_intro.mp4"
+            logger.info(f"Video uploaded to MinIO: {output_url}")
+            result["output_url"] = output_url
             
             self.update_state(
                 state=states.SUCCESS,
                 meta={
                     "task_id": task_id,
                     "status": "completed",
-                    "output_file": output_path,
+                    "output_url": output_url,                    
                     "message": "Reddit intro video generated successfully"
                 }
             )
@@ -125,7 +132,7 @@ def process_reddit_intro_task(
             result = {
                 "task_id": task_id,
                 "status": "completed",
-                "output_file": output_path,
+                "output_url": output_url,
                 "message": "Reddit intro video generated successfully"                
             }
             logger.info(f"Result: {json.dumps(result, indent=4)}")
