@@ -2,12 +2,15 @@ import re
 import logging
 import json
 import subprocess
+import random
+import math
+import time
 from pathlib import Path
 from typing import Optional
 from PIL import Image
 from celery_worker import celery_app
 from reddit_utils import create_fancy_thumbnail
-from ffmpeg_utils import ProgressFfmpeg
+from ffmpeg_utils import ProgressFfmpeg, get_media_duration_seconds
 from webhook_utils import send_webhook_task
 from celery.result import AsyncResult
 from celery import states
@@ -61,10 +64,11 @@ def process_reddit_intro_task(
     title_img = create_fancy_thumbnail(title_template, title, font_color, padding, subreddit=subreddit)
     title_img.save(f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png")
 
-    output_path = f"{TEMP_ASSETS_PATH}/{temp_folder}/reddit_intro.mp4"
+    output_path = f"{TEMP_ASSETS_PATH}/{temp_folder}/{temp_folder}.mp4"
 
     try:
         if background_video_url is None:
+            # TODO: generate green background video            
             background_video_url = "https://storage.charichagaming.com.np/video-storage/Satisfying%20Cake%20Compilation-satisfying-cake.mp4"
 
         def update_celery_progress(completed_percent: float):
@@ -86,16 +90,32 @@ def process_reddit_intro_task(
         with ProgressFfmpeg(float(duration), update_celery_progress) as progress_monitor:
             ffmpeg_cmd = [
                 "ffmpeg", "-y",
-                "-stream_loop", "-1", "-i", background_video_url,
-                "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png"
+                # "-stream_loop", "-1", "-i", background_video_url,
+                # "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png"
             ]
+
+            bg_duration = get_media_duration_seconds(background_video_url)
+            if bg_duration > duration:
+                max_start_time = bg_duration - duration
+                start_time = random.uniform(0, max_start_time)
+                ffmpeg_cmd.extend([
+                    "-ss", str(start_time),                    
+                    "-i", background_video_url,
+                    "-t", str(duration)
+                ])
+            else:
+                ffmpeg_cmd.extend(["-stream_loop", "-1", "-i", background_video_url])
+
+            ffmpeg_cmd.extend([
+                "-loop", "1", "-framerate", "60", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png"
+            ])
 
             fade_in_duration = 1
             fade_out_duration = 2
             filter_complex_args = [
                 f"[0:v]scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=increase,crop={resolution_x}:{resolution_y}[bg]",
                 f"[1:v]scale={screenshot_width}:-1[title_scaled]",
-                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2,fade=t=in:st=0:d={fade_in_duration},fade=t=out:st={{fade_out_start}}:d=3[outv]"
+                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2,fade=t=in:st=0:d={fade_in_duration},fade=t=out:st={{fade_out_start}}:d={fade_out_duration}[outv]"
             ]
 
             if audio_url:
@@ -106,17 +126,22 @@ def process_reddit_intro_task(
                 audio_duration = float(probe_result.stdout.strip())
                 logger.info(f"Audio duration: {audio_duration}")
 
-                duration = min(audio_duration, duration) + fade_in_duration
-                fade_out_start = duration + fade_out_duration
+                duration = min(math.ceil(audio_duration), duration) + fade_in_duration
+                fade_out_start = duration
                 duration += fade_out_duration
 
                 logger.info(f"Total video duration: {duration}")
+                logger.info(f"Fade In Start: 0")
+                logger.info(f"Fade In Duration: {fade_in_duration}")
+
+                logger.info(f"Fade Out start: {fade_out_start}")
+                logger.info(f"Fade Out Duration: {fade_out_duration}")
 
                 ffmpeg_cmd.extend(["-i", audio_url])
-                filter_complex_args.extend([f"[2:a]adelay=2000|2000[outa]"])
+                filter_complex_args.extend([f"[2:a]adelay={fade_in_duration*1000}|{fade_in_duration*1000}[outa]"])
                 ffmpeg_cmd.extend(["-map", "[outa]", "-c:a", "aac"])
             else:
-                fade_out_start = duration - 3                
+                fade_out_start = duration - fade_in_duration
 
             filter_complex_args[2] = filter_complex_args[2].format(fade_out_start=fade_out_start)
             ffmpeg_cmd.extend([
@@ -125,7 +150,7 @@ def process_reddit_intro_task(
                 "-c:v", "libx264",
                 "-t", f"{duration}",
                 "-pix_fmt", "yuv420p",
-                "-r", "30",
+                "-r", "60",
                 "-progress", progress_monitor.output_file.name,
                 output_path
             ])
@@ -144,7 +169,7 @@ def process_reddit_intro_task(
             #     output_path
             # ]
             logger.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
-            process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             stdout, stderr = process.communicate()
 
             if process.returncode != 0:
@@ -179,10 +204,13 @@ def process_reddit_intro_task(
             return result
     except subprocess.CalledProcessError as e:
         logger.error(f"Error generating video: {e}")
+        logger.error(f"FFmpeg stdout output: {e.stdout}")
         logger.error(f"FFmpeg stderr output: {e.stderr}")
         self.update_state(
             state=states.FAILURE,
             meta={
+                "exc_type": type(e).__name__,
+                "exc_message": "Ffmpeg error generating video",
                 "task_id": task_id,
                 "status": "failed",
                 "stderr": e.stderr,
@@ -210,8 +238,8 @@ def process_reddit_intro_task(
             current_task_result = AsyncResult(task_id, app=celery_app)
             payload = {
                 "task_id": task_id,
-                "task_state": current_task_result.state,
-                "task_info": current_task_result.info,
+                "task_state": current_task_result.state if current_task_result.state else "unknown",
+                "task_info": current_task_result.info if current_task_result.info else "unknown",
                 "result": result
             }
             send_webhook_task(webhook_url, payload, task_id)
