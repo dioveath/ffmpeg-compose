@@ -4,7 +4,9 @@
 - [x] Add ability to stop task
 - [x] Add webhook support on task completion
 - [x] Fix Ffmpeg subprocess Error logging (it is not logging the error on status or result)
-- [ ] Add ability to create reddit post intro video
+- [x] Add ability to create reddit post intro video
+- [x] Add webhook support for reddit post intro video
+- [ ] Upload reddit post intro video to minio and return the url in result 
 - [ ] Optimize and refactor the FFmpegOptions to make it more robust, add options for inputs like -ss, type strict by defining each of ffmpeg options for readability and clarity.
 - [ ] Shift local tts to here with new endpoint.
 
