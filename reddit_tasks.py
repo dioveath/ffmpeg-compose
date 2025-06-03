@@ -36,6 +36,7 @@ def process_reddit_intro_task(
     font: str,
     font_color: str,
     padding: int,
+    audio_url: Optional[str] = None,
     background_video_url: Optional[str] = None,
     webhook_url: Optional[str] = None
 ):
@@ -83,18 +84,43 @@ def process_reddit_intro_task(
         update_celery_progress(0.0)
 
         with ProgressFfmpeg(float(duration), update_celery_progress) as progress_monitor:
-            filter_complex_args = (
-                f"[0:v]scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=increase,"
-                f"crop={resolution_x}:{resolution_y}[bg];"
-                # f"pad={resolution_x}:{resolution_y}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
-                f"[1:v]scale={screenshot_width}:-1[title_scaled];"
-                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2,fade=t=in:st=0:d=2,fade=t=out:st={duration-2}:d=3[outv]"
-            )
             ffmpeg_cmd = [
                 "ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", background_video_url,
-                "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png",
-                "-filter_complex", filter_complex_args,
+                "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png"
+            ]
+
+            fade_in_duration = 1
+            fade_out_duration = 2
+            filter_complex_args = [
+                f"[0:v]scale={resolution_x}:{resolution_y}:force_original_aspect_ratio=increase,crop={resolution_x}:{resolution_y}[bg]",
+                f"[1:v]scale={screenshot_width}:-1[title_scaled]",
+                f"[bg][title_scaled]overlay=(W-w)/2:(H-h)/2,fade=t=in:st=0:d={fade_in_duration},fade=t=out:st={{fade_out_start}}:d=3[outv]"
+            ]
+
+            if audio_url:
+                probe_cmd = [
+                    "ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_url
+                ]
+                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                audio_duration = float(probe_result.stdout.strip())
+                logger.info(f"Audio duration: {audio_duration}")
+
+                duration = min(audio_duration, duration) + fade_in_duration
+                fade_out_start = duration + fade_out_duration
+                duration += fade_out_duration
+
+                logger.info(f"Total video duration: {duration}")
+
+                ffmpeg_cmd.extend(["-i", audio_url])
+                filter_complex_args.extend([f"[2:a]adelay=2000|2000[outa]"])
+                ffmpeg_cmd.extend(["-map", "[outa]", "-c:a", "aac"])
+            else:
+                fade_out_start = duration - 3                
+
+            filter_complex_args[2] = filter_complex_args[2].format(fade_out_start=fade_out_start)
+            ffmpeg_cmd.extend([
+                "-filter_complex", ";".join(filter_complex_args),
                 "-map", "[outv]",
                 "-c:v", "libx264",
                 "-t", f"{duration}",
@@ -102,7 +128,21 @@ def process_reddit_intro_task(
                 "-r", "30",
                 "-progress", progress_monitor.output_file.name,
                 output_path
-            ]
+            ])
+            
+            # ffmpeg_cmd = [
+            #     "ffmpeg", "-y",
+            #     "-stream_loop", "-1", "-i", background_video_url,
+            #     "-loop", "1", "-framerate", "30", "-i", f"{TEMP_ASSETS_PATH}/{temp_folder}/title.png",
+            #     "-filter_complex", "".join(filter_complex_args),
+            #     "-map", "[outv]",
+            #     "-c:v", "libx264",
+            #     "-t", f"{duration}",
+            #     "-pix_fmt", "yuv420p",
+            #     "-r", "30",
+            #     "-progress", progress_monitor.output_file.name,
+            #     output_path
+            # ]
             logger.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
             process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
             stdout, stderr = process.communicate()
@@ -146,7 +186,7 @@ def process_reddit_intro_task(
                 "task_id": task_id,
                 "status": "failed",
                 "stderr": e.stderr,
-                "progress": self.request.meta.get("progress", 0),
+                # "progress": self.request.meta.get("progress", 0),
                 "message": "Error generating Reddit intro video"
             }
         )
@@ -157,7 +197,7 @@ def process_reddit_intro_task(
             meta={
                 "task_id": task_id,
                 "status": "failed",
-                "progress": self.request.meta.get("progress", 0),
+                # "progress": self.request.meta.get("progress", 0),
                 "message": "Error generating Reddit intro video"
             }
         )
@@ -167,7 +207,7 @@ def process_reddit_intro_task(
         logger.info(f"Cleaned up temporary assets")
 
         if webhook_url:
-            current_task_result = AsyncResult(task_id)
+            current_task_result = AsyncResult(task_id, app=celery_app)
             payload = {
                 "task_id": task_id,
                 "task_state": current_task_result.state,
