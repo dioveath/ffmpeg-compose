@@ -203,6 +203,7 @@ class RedditIntroOptions(BaseModel):
     font: str = Field(default="Roboto-Bold.ttf", description="Font for the title")
     font_color: str = Field(default="#000000", description="Font color")
     padding: int = Field(default=5, description="Padding for the title")
+    audio_url: Optional[str] = Field(default=None, description="URL of the audio file. It will overwrite the duration of the video if provided")
     background_video_url: Optional[str] = Field(default=None, description="URL of the background video")
     webhook_url: Optional[str] = Field(default=None, description="Webhook URL to call upon task completion")
 
@@ -219,6 +220,7 @@ async def generate_reddit_intro(options: RedditIntroOptions):
             font=options.font,
             font_color=options.font_color,
             padding=options.padding,
+            audio_url=options.audio_url,
             background_video_url=options.background_video_url,
             webhook_url=options.webhook_url                 
         )        
