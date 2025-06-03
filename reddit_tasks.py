@@ -8,6 +8,9 @@ from PIL import Image
 from celery_worker import celery_app
 from reddit_utils import create_fancy_thumbnail
 from ffmpeg_utils import ProgressFfmpeg
+from webhook_utils import send_webhook_task
+from celery.result import AsyncResult
+from celery import states
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,15 @@ def process_reddit_intro_task(
             update_celery_progress(1.0)    
             logger.info(f"Video generated successfully: {output_path}")
             
+            self.update_state(
+                state=states.SUCCESS,
+                meta={
+                    "task_id": task_id,
+                    "status": "completed",
+                    "output_file": output_path,
+                    "message": "Reddit intro video generated successfully"
+                }
+            )
 
             result = {
                 "task_id": task_id,
@@ -122,7 +134,7 @@ def process_reddit_intro_task(
         logger.error(f"Error generating video: {e}")
         logger.error(f"FFmpeg stderr output: {e.stderr}")
         self.update_state(
-            state=self.states.FAILURE,
+            state=states.FAILURE,
             meta={
                 "task_id": task_id,
                 "status": "failed",
@@ -134,7 +146,7 @@ def process_reddit_intro_task(
     except Exception as e:
         logger.error(f"Error generating video: {e}")
         self.update_state(
-            state=self.states.FAILURE,
+            state=states.FAILURE,
             meta={
                 "task_id": task_id,
                 "status": "failed",
@@ -146,5 +158,13 @@ def process_reddit_intro_task(
         logger.info(f"Cleaning up temporary assets...")
         # shutil.rmtree(temp_assets_path)
         logger.info(f"Cleaned up temporary assets")
-        return result
 
+        if webhook_url:
+            current_task_result = AsyncResult(task_id)
+            payload = {
+                "task_id": task_id,
+                "task_state": current_task_result.state,
+                "task_info": current_task_result.info,
+                "result": result
+            }
+            send_webhook_task(webhook_url, payload, task_id)
