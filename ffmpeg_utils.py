@@ -277,3 +277,20 @@ class ProgressFfmpeg(threading.Thread):
 
     def __exit__(self, *args, **kwargs):
         self.stop()
+
+
+def get_media_duration_seconds(video_url):
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            # "-select_streams", "v:0",
+            "-show_entries", "stream=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return float(result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error getting video duration: {e}")
+        return None
