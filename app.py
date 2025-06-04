@@ -19,10 +19,10 @@ app = FastAPI(title="FFmpeg Compose API", description="API for processing FFmpeg
 
 class FFmpegOptions(BaseModel):
     """Pydantic model for validating FFmpeg command options"""
-    input_files: List[str] = Field(..., description="List of input file paths")
-    output_file: str = Field(..., description="Output file path")
-    options: Dict[str, Any] = Field(default_factory=dict, description="FFmpeg command options")
     global_options: List[str] = Field(default_factory=list, description="Global FFmpeg options")
+    input_files: List[str | List[str]] = Field(..., description="List of input file paths")
+    options: Dict[str, Any] = Field(default_factory=dict, description="FFmpeg command options")    
+    output_file: str = Field(..., description="Output file path")
     webhook_url: Optional[str] = Field(default=None, description="Webhook URL to call upon task completion")
 
 
@@ -58,7 +58,24 @@ async def list_caption_fonts():
 
 @app.post("/compose")
 async def compose_ffmpeg(options: FFmpegOptions):
-    """Endpoint to compose and execute FFmpeg commands"""
+    """Endpoint to compose and execute FFmpeg commands.
+    Example JSON Payload:
+    ```json
+    {
+        "input_files": [
+            ["-ss", "00:01:00", "-r", "60", "/path/to/input.mp4"],
+            "/path/to/another/input.mp4"
+        ],
+        "output_file": "/path/to/output.mp4",
+        "options": {
+            "c:v": "libx264",
+            "c:a": "aac
+        },
+        "global_options": ["-y", "-loglevel", "info"],
+        "webhook_url": "https://n8n.charichagaming.com.np/webhook"
+    }
+    ```
+    """
     try:
         # Submit the task to Celery
         task = process_ffmpeg_task.delay(
