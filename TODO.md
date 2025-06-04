@@ -7,7 +7,8 @@
 - [x] Add ability to create reddit post intro video
 - [x] Add webhook support for reddit post intro video
 - [x] Upload reddit post intro video to minio and return the url in result 
-- [ ] Optimize and refactor the FFmpegOptions to make it more robust, add options for inputs like -ss, type strict by defining each of ffmpeg options for readability and clarity.
+- [x] Optimize and refactor the FFmpegOptions to make it more robust, add options for inputs like -ss, type strict by defining each of ffmpeg options for readability and clarity.
+- [ ] Add default background url to be green screen in reddit_intro endpoint
 - [ ] Shift local tts to here with new endpoint.
 
 - [ ] Add ability to upload file to minioserver. Use minio as our file storage

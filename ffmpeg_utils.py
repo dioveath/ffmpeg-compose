@@ -62,7 +62,13 @@ def build_ffmpeg_command(input_files: List[str],
     
     # Add input files
     for input_file in input_files:
-        command.extend(['-i', input_file])
+        if isinstance(input_file, list):
+            path_from_list = input_file[-1]
+            options_for_this_input = input_file[:-1]
+            command.extend(options_for_this_input)
+            command.extend(['-i', str(path_from_list)])
+        elif isinstance(input_file, str):
+            command.extend(['-i', input_file])
     
     # Add specific options
     for option, value in options.items():
