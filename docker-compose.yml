@@ -41,6 +41,13 @@ services:
       - MINIO_SECURE=False
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
 
   flower:
     build: .

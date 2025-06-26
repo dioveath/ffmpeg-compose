@@ -1,10 +1,16 @@
-FROM python:3.11.11-slim
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install FFmpeg
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y python3.12 python3-pip python3.12-venv ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
 RUN mkdir -p /usr/local/share/fonts    
 COPY /fonts /usr/local/share/fonts
