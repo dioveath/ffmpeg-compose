@@ -1,11 +1,68 @@
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install FFmpeg
+# Install build dependencies for ffmpeg
 RUN apt-get update && \
-    apt-get install -y python3.12 python3-pip python3.12-venv ffmpeg && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    yasm \
+    nasm \
+    cmake \
+    libtool \
+    libc6 \
+    libc6-dev \
+    unzip \
+    wget \
+    libnuma-dev \
+    pkg-config \
+    git \
+    # Dev libraries for https and subtitles
+    gnutls-dev \
+    libass-dev \
+    libfontconfig1-dev \
+    libfreetype6-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git && \
+    cd nv-codec-headers && \
+    make install
+
+RUN git clone https://git.ffmpeg.org/ffmpeg.git    
+
+WORKDIR /build/ffmpeg
+RUN ./configure \
+      --enable-nonfree \
+      --enable-cuda-nvcc \
+      --enable-nvdec \
+      --enable-nvenc \
+      --enable-libnpp \
+      --extra-cflags="-I/usr/local/cuda/include" \
+      --extra-ldflags="-L/usr/local/cuda/lib64" \
+      --enable-gnutls \
+      --enable-libass \
+      --enable-libfontconfig \
+      --enable-libfreetype \
+      --disable-static \
+      --enable-shared && \
+    make -j$(nproc) && \
+    make install
+
+
+# FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04    
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and other runtime dependencies
+RUN apt-get update && \
+    apt-get install -y python3.12 python3-pip python3.12-venv fontconfig libass9 libgnutls30 libfreetype6 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/ /usr/local/
+RUN ldconfig # update the library cache so system can find new ffmpeg shared libraries
 
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
