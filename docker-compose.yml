@@ -28,7 +28,7 @@ services:
       - .:/app
     depends_on:
       - redis
-    command: celery -A celery_worker worker --loglevel=info -c 2
+    command: celery -A celery_worker worker --loglevel=info -c 2 --max-tasks-per-child=10
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0

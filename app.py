@@ -244,7 +244,6 @@ async def generate_reddit_intro(options: RedditIntroOptions):
         return {"task_id": task.id, "status": "PROCESSING"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
 
 if __name__ == "__main__":
     import uvicorn

@@ -222,7 +222,7 @@ def parse_ffmpeg_progress(stderr_line: str, detected_duration: Optional[float] =
                     frame = int(frame_str)
                     # Use frame count as an additional progress indicator
                     if frame > 0 and progress_percent == 0.0:
-                        progress_percent = 0.1  # At least show some progress if frames are being processed
+                        progress_percent = 0.01  # At least show some progress if frames are being processed
                 except ValueError:
                     pass
             
