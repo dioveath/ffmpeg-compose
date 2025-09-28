@@ -69,6 +69,7 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_BUCKET_NAME=video-storage
       - MINIO_SECURE=False
+      - FLOWER_UNAUTHENTICATED_API=1
 
   redis:
     restart: always
