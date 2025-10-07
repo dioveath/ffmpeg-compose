@@ -1,5 +1,6 @@
 import os
 import json
+import tempfile
 import requests
 from datetime import timedelta
 import subprocess
@@ -7,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from celery import Celery
 import logging
 from minio import Minio
-from ffmpeg_utils import build_ffmpeg_command, format_command_for_display, validate_ffmpeg_installed, parse_ffmpeg_progress
+from ffmpeg_utils import build_ffmpeg_command, download_remote_file_to_temp, format_command_for_display, validate_ffmpeg_installed, parse_ffmpeg_progress
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -73,192 +74,200 @@ def process_ffmpeg_task(self, input_files: List[str], output_file: str,
     process = None
     result = None
 
-    try:
-        # Log task start
-        logger.info(f"Starting FFmpeg task with {len(input_files)} input files, output: {output_file}")
-        
-        # Ensure output directory exists
-        output_dir = os.path.dirname(output_file)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            logger.info(f"Created output directory: {output_dir}")
-        
-        # Build the FFmpeg command
-        command = build_ffmpeg_command(
-            input_files=input_files,
-            output_file=output_file,
-            options=options,
-            global_options=global_options
-        )
-        
-        logger.info(f"Built FFmpeg command: {command}")
-        # Format command for logging
-        formatted_command = format_command_for_display(command)
-        logger.info(f"Executing FFmpeg command: {formatted_command}")
-        
-        # Execute the command with progress tracking
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            bufsize=1
-        )
-        
-        # Track progress
-        progress_data = {
-            'time': '00:00:00.00',
-            'frame': 0,
-            'progress_percent': 0.0,
-            'status': 'processing'
-        }
-        
-        # Update task state with initial progress
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'pid': process.pid,
-                'progress': progress_data
-            }
-        )
-        
-        # Process output in real-time to track progress
-        stderr_lines = []
-        last_update_time = 0
-        update_interval = 1.0  # Update progress at most once per second
-        duration = None
-        
-        import time
-        current_time = time.time()
-        
-        for line in iter(process.stderr.readline, ''):
-            stderr_lines.append(line)
-            # Parse progress information
-            progress_info, detected_duration = parse_ffmpeg_progress(line, duration)
-            
-            if duration is None and detected_duration is not None:
-                duration = detected_duration
-            
-            # Update progress data if new information is available
-            if progress_info:
-                progress_data.update(progress_info)
-                
-                # Limit how often we update the task state to avoid overwhelming Celery/Redis
-                if current_time - last_update_time >= update_interval:
-                    # Update task state with progress
-                    self.update_state(
-                        state='PROGRESS',
-                        meta={
-                            'progress': progress_data
-                        }
-                    )
-                    logger.info(f"FFmpeg progress: {progress_data}")
-                    last_update_time = current_time
-            
-            # Update current time for next iteration
-            current_time = time.time()
-        
-        # Join stderr lines for error reporting
-        stderr = '\n'.join(stderr_lines)
-            
-        # Wait for process to complete
-        process.stderr.close()
-        process.stdout.close()
-        returncode = process.wait()
-
-        if returncode != 0:
-            logger.error(f"FFmpeg command failed with return code {returncode}")
-            logger.error(f"Error output: {stderr}")
-            result = {
-                'success': False,
-                'error': stderr,
-                'command': formatted_command,
-                'return_code': returncode,
-            }
-            return result
-        
-        # Upload the processed file to MinIO
-        object_name = os.path.basename(output_file)
+    logger.info(f"Starting FFmpeg task with {len(input_files)} input files, output: {output_file}")
+    with tempfile.TemporaryDirectory(prefix="ffmpeg-assets-") as temp_dir:        
         try:
-            minio_client.fput_object(bucket_name, object_name, output_file)
-            minio_public_endpoint = os.environ.get('MINIO_PUBLIC_ENDPOINT', 'http://localhost:9000')
-            storage_url = f"{minio_public_endpoint}/{bucket_name}/{object_name}"
-            # storage_url = minio_client.presigned_get_object(bucket_name, object_name, expires=timedelta(days=365*10))
-            logger.info(f"File uploaded to MinIO: {storage_url}")
+            output_dir = os.path.dirname(output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                logger.info(f"Created output directory: {output_dir}")
+
+            local_input_files = []
+            for item in input_files:
+                path_or_url = item[-1]
+                if path_or_url.startswith(('http://', 'https://')):
+                    local_path = download_remote_file_to_temp(path_or_url, temp_dir)
+                    new_item = item[:-1] + [local_path]
+                    local_input_files.append(new_item)
+                else:
+                    local_input_files.append(item)
+
+            command = build_ffmpeg_command(
+                input_files=local_input_files,
+                output_file=output_file,
+                options=options,
+                global_options=global_options
+            )
             
-            # Remove local file after successful upload
-            os.remove(output_file)
-            logger.info(f"Local file removed: {output_file}")
+            logger.info(f"Built FFmpeg command: {command}")
+            # Format command for logging
+            formatted_command = format_command_for_display(command)
+            logger.info(f"Executing FFmpeg command: {formatted_command}")
             
-            # Update progress to 100% for completed tasks
-            progress_data['progress_percent'] = 100.0
-            progress_data['status'] = 'completed'
+            # Execute the command with progress tracking
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
             
-            result = {
-                'success': True,
-                'output_url': storage_url,
-                'command': formatted_command,
-                'message': 'FFmpeg processing and upload completed successfully',
-                # 'progress': progress_data
-            }
-            return result
-        except Exception as upload_error:
-            logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
-            # Update progress status for upload failure
-            progress_data['status'] = 'upload_failed'
-            
-            result = {
-                'success': False,
-                'error': f"Failed to upload file: {str(upload_error)}",
-                'command': formatted_command,
-                'progress': progress_data
-            }
-            return result
-    
-    except Exception as e:
-        error_msg = str(e)
-        logger.exception(f"Exception during FFmpeg processing: {error_msg}")
-        # Set progress status for general failure
-        if 'progress_data' in locals():
-            progress_data['status'] = 'failed'
-        else:
+            # Track progress
             progress_data = {
                 'time': '00:00:00.00',
                 'frame': 0,
                 'progress_percent': 0.0,
-                'status': 'failed'
+                'status': 'processing'
             }
             
-        result = {
-            'success': False,
-            'error': error_msg,
-            'command': format_command_for_display(command) if command else 'Command not built',
-            'progress': progress_data
-        }
-        return result
-    
-    finally:
-        if process is not None:
+            # Update task state with initial progress
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'pid': process.pid,
+                    'progress': progress_data
+                }
+            )
+            
+            # Process output in real-time to track progress
+            stderr_lines = []
+            last_update_time = 0
+            update_interval = 1.0  # Update progress at most once per second
+            duration = None
+            
+            import time
+            current_time = time.time()
+            
+            for line in iter(process.stderr.readline, ''):
+                stderr_lines.append(line)
+                # Parse progress information
+                progress_info, detected_duration = parse_ffmpeg_progress(line, duration)
+                
+                if duration is None and detected_duration is not None:
+                    duration = detected_duration
+                
+                # Update progress data if new information is available
+                if progress_info:
+                    progress_data.update(progress_info)
+                    
+                    # Limit how often we update the task state to avoid overwhelming Celery/Redis
+                    if current_time - last_update_time >= update_interval:
+                        # Update task state with progress
+                        self.update_state(
+                            state='PROGRESS',
+                            meta={
+                                'progress': progress_data
+                            }
+                        )
+                        logger.info(f"FFmpeg progress: {progress_data}")
+                        last_update_time = current_time
+                
+                # Update current time for next iteration
+                current_time = time.time()
+            
+            # Join stderr lines for error reporting
+            stderr = '\n'.join(stderr_lines)
+                
+            # Wait for process to complete
+            process.stderr.close()
+            process.stdout.close()
+            returncode = process.wait()
+
+            if returncode != 0:
+                logger.error(f"FFmpeg command failed with return code {returncode}")
+                logger.error(f"Error output: {stderr}")
+                result = {
+                    'success': False,
+                    'error': stderr,
+                    'command': formatted_command,
+                    'return_code': returncode,
+                }
+                return result
+            
+            # Upload the processed file to MinIO
+            object_name = os.path.basename(output_file)
             try:
-                if process.poll() is None:
-                    process.terminate()
-                    logger.info(f"Process {process.pid} terminated in finally block")
-            except Exception as term_error:
-                logger.error(f"Error terminating process: {term_error}")
+                minio_client.fput_object(bucket_name, object_name, output_file)
+                minio_public_endpoint = os.environ.get('MINIO_PUBLIC_ENDPOINT', 'http://localhost:9000')
+                storage_url = f"{minio_public_endpoint}/{bucket_name}/{object_name}"
+                # storage_url = minio_client.presigned_get_object(bucket_name, object_name, expires=timedelta(days=365*10))
+                logger.info(f"File uploaded to MinIO: {storage_url}")
+                
+                # Remove local file after successful upload
+                os.remove(output_file)
+                logger.info(f"Local file removed: {output_file}")
+                
+                # Update progress to 100% for completed tasks
+                progress_data['progress_percent'] = 100.0
+                progress_data['status'] = 'completed'
+                
+                result = {
+                    'success': True,
+                    'output_url': storage_url,
+                    'command': formatted_command,
+                    'message': 'FFmpeg processing and upload completed successfully',
+                    # 'progress': progress_data
+                }
+                return result
+            except Exception as upload_error:
+                logger.error(f"Failed to upload file to MinIO: {str(upload_error)}")
+                # Update progress status for upload failure
+                progress_data['status'] = 'upload_failed'
+                
+                result = {
+                    'success': False,
+                    'error': f"Failed to upload file: {str(upload_error)}",
+                    'command': formatted_command,
+                    'progress': progress_data
+                }
+                return result
         
-        if webhook_url:
-            task_result_data = {
-                'task_id': self.request.id,
-                'status': self.AsyncResult(self.request.id).state, # Get the final state
-                'result': result
+        except Exception as e:
+            error_msg = str(e)
+            logger.exception(f"Exception during FFmpeg processing: {error_msg}")
+            # Set progress status for general failure
+            if 'progress_data' in locals():
+                progress_data['status'] = 'failed'
+            else:
+                progress_data = {
+                    'time': '00:00:00.00',
+                    'frame': 0,
+                    'progress_percent': 0.0,
+                    'status': 'failed'
+                }
+                
+            result = {
+                'success': False,
+                'error': error_msg,
+                'command': format_command_for_display(command) if command else 'Command not built',
+                'progress': progress_data
             }
+            return result
+        
+        finally:
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        logger.info(f"Process {process.pid} terminated in finally block")
+                except Exception as term_error:
+                    logger.error(f"Error terminating process: {term_error}")
             
-            try:
-                logger.info(f"Sending webhook notification to {webhook_url} for task {self.request.id}")
-                response = requests.post(webhook_url, json=task_result_data, timeout=10) # Added timeout
-                response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
-                logger.info(f"Webhook notification sent successfully to {webhook_url} for task {self.request.id}. Status: {response.status_code}")
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to send webhook notification to {webhook_url} for task {self.request.id}: {str(e)}")
-            except Exception as e:
-                logger.error(f"An unexpected error occurred while sending webhook to {webhook_url} for task {self.request.id}: {str(e)}")
+            if webhook_url:
+                task_result_data = {
+                    'task_id': self.request.id,
+                    'status': self.AsyncResult(self.request.id).state, # Get the final state
+                    'result': result
+                }
+                
+                try:
+                    logger.info(f"Sending webhook notification to {webhook_url} for task {self.request.id}")
+                    response = requests.post(webhook_url, json=task_result_data, timeout=10) # Added timeout
+                    response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+                    logger.info(f"Webhook notification sent successfully to {webhook_url} for task {self.request.id}. Status: {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Failed to send webhook notification to {webhook_url} for task {self.request.id}: {str(e)}")
+                except Exception as e:
+                    logger.error(f"An unexpected error occurred while sending webhook to {webhook_url} for task {self.request.id}: {str(e)}")
+
